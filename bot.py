@@ -16,7 +16,7 @@ LOCALE=ru   # ru/uz язык по умолчанию
 
 import os
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -32,6 +32,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove,
 )
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -179,7 +180,6 @@ def contact_keyboard(locale: str) -> ReplyKeyboardMarkup:
 
 
 def _grid(items: List[List[str]], columns: int = 2) -> List[List[InlineKeyboardButton]]:
-    # items: list of [callback_data, label]
     rows: List[List[InlineKeyboardButton]] = []
     row: List[InlineKeyboardButton] = []
     for code, label in items:
@@ -205,7 +205,7 @@ def modules_keyboard(locale: str, selected: Optional[List[str]] = None, columns:
 
 def rating_keyboard(locale: str) -> InlineKeyboardMarkup:
     items = [(f"r:{v}", v) for v in T[locale]["btn_rating"]]
-    rows = _grid(items, columns=5)  # одна строка 1..5
+    rows = _grid(items, columns=5)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -237,9 +237,7 @@ async def cmd_whereami(m: Message):
 async def cmd_start(m: Message, state: FSMContext):
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await state.clear()
-    # Сначала предлагаем выбрать язык
     await m.answer(_k(locale, "ask_lang"), reply_markup=lang_keyboard())
-    # Затем сразу даём старт опросу
     await m.answer(_k(locale, "start"))
     await m.answer(_k(locale, "ask_company"))
     await state.set_state(Form.company)
@@ -260,19 +258,16 @@ async def f_company(m: Message, state: FSMContext):
     await state.set_state(Form.contact)
 
 
-# Приходит объект контакта по кнопке "Отправить номер"
 @router.message(Form.contact, F.contact)
 async def f_contact_button(m: Message, state: FSMContext):
     phone = m.contact.phone_number
     await state.update_data(contact=phone)
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
-    # Убираем клавиатуру
-    await m.answer("✅", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=" ")]], resize_keyboard=True))
+    await m.answer("✅", reply_markup=ReplyKeyboardRemove())
     await m.answer(_k(locale, "ask_modules"), reply_markup=modules_keyboard(locale))
     await state.set_state(Form.modules)
 
 
-# Фолбэк: если пользователь всё же ввёл текст руками
 @router.message(Form.contact)
 async def f_contact_text(m: Message, state: FSMContext):
     await state.update_data(contact=(m.text or "").strip())
@@ -284,7 +279,7 @@ async def f_contact_text(m: Message, state: FSMContext):
 @router.callback_query(Form.modules, F.data.startswith("m:"))
 async def f_modules(c: CallbackQuery, state: FSMContext):
     locale = USER_LOCALE.get(c.from_user.id, DEFAULT_LOCALE)
-    code = c.data.split(":", 1)[1]
+    code = c.data.split(":", 1)[1]  # чистый код модуля (без префикса)
     data = await state.get_data()
     selected: List[str] = data.get("modules", [])
 
@@ -297,18 +292,16 @@ async def f_modules(c: CallbackQuery, state: FSMContext):
         await state.set_state(Form.rating)
         return
 
-    real_code = code
     if code in selected:
-        selected.remove(real_code)
+        selected.remove(code)
     else:
-        selected.append(real_code)
+        selected.append(code)
 
     await state.update_data(modules=selected)
     await c.message.edit_reply_markup(reply_markup=modules_keyboard(locale, selected))
     await c.answer("✓")
 
 
-# Оценка только кнопками 1..5
 @router.callback_query(Form.rating, F.data.startswith("r:"))
 async def f_rating_cb(c: CallbackQuery, state: FSMContext):
     val = c.data.split(":", 1)[1]
@@ -364,35 +357,23 @@ async def f_ready(c: CallbackQuery, state: FSMContext):
     user = c.from_user
     modules = data.get("modules", [])
     label_map = {code: label for code, label in T[locale]["modules"]}
-    modules_labels = ", ".join(label_map.get(x.replace("m:", ""), x) for x in modules)
+    modules_labels = ", ".join(label_map.get(x, x) for x in modules)
 
     text = (
-        "🆕 <b>Новый фидбек по MVP TripleA</b>
-"
-        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
-"
-        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})
-"
-        f"🏢 Компания: {data.get('company','')}
-"
-        f"📞 Контакт: {data.get('contact','')}
-"
-        f"🧩 Модули: {modules_labels}
-"
-        f"⭐️ Оценка: {data.get('rating','')}
-"
-        f"👍 Понравилось: {data.get('pros','')}
-"
-        f"👎 Неудобно: {data.get('cons','')}
-"
-        f"🐞 Баги: {data.get('bugs','')}
-"
-        f"➕ Must-have: {data.get('missing','')}
-"
+        "🆕 <b>Новый фидбек по MVP TripleA</b>\n"
+        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})\n"
+        f"🏢 Компания: {data.get('company','')}\n"
+        f"📞 Контакт: {data.get('contact','')}\n"
+        f"🧩 Модули: {modules_labels}\n"
+        f"⭐️ Оценка: {data.get('rating','')}\n"
+        f"👍 Понравилось: {data.get('pros','')}\n"
+        f"👎 Неудобно: {data.get('cons','')}\n"
+        f"🐞 Баги: {data.get('bugs','')}\n"
+        f"➕ Must-have: {data.get('missing','')}\n"
         f"🚀 Готовы продолжать: {'Да' if ready_flag else 'Нет'}"
     )
 
-    # Отправка в группу
     try:
         if GROUP_CHAT_ID is None:
             raise RuntimeError("GROUP_CHAT_ID is not set")
@@ -403,7 +384,6 @@ async def f_ready(c: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Дублируем админам (если указаны)
     for admin_id in ADMINS:
         try:
             await bot.send_message(int(admin_id), text, disable_web_page_preview=True)
