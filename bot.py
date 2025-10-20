@@ -230,8 +230,7 @@ async def cb_lang(c: CallbackQuery):
 
 @router.message(Command("whereami"))
 async def cmd_whereami(m: Message):
-    await m.answer(f"chat_id: <code>{m.chat.id}</code>
-chat_type: <code>{m.chat.type}</code>")
+    await m.answer(f"chat_id: <code>{m.chat.id}</code>\nchat_type: <code>{m.chat.type}</code>")
 
 
 @router.message(CommandStart())
