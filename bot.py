@@ -1,21 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-TripleA Partner Feedback Bot — версия БЕЗ Google Sheets.
-Все ответы отправляются в Telegram‑группу (и/или админам в ЛС).
-Стек: FastAPI (webhook), Aiogram v3. Render‑ready.
+TripleA Partner Feedback Bot — noSheets (RU/UZ, контакт по кнопке, больше кнопок, минимум ручного ввода)
+Все ответы отправляются в Telegram‑группу (+ дубль админам).
+Стек: FastAPI (webhook), Aiogram v3. Готов для Render/uvicorn.
 
 ENV VARS
 --------
-BOT_TOKEN=...                          # токен бота
+BOT_TOKEN=...
 WEBHOOK_URL=https://your.onrender.com/webhook
-WEBHOOK_SECRET=supersecret             # секрет для заголовка x-telegram-bot-api-secret-token
-GROUP_CHAT_ID=-1001234567890           # ID вашей TG‑группы (отрицательное число)
-ADMINS=123456789,987654321             # кому дублировать фидбек в ЛС (опц.)
-LOCALE=ru                              # ru/uz — язык по умолчанию
-
-Как узнать GROUP_CHAT_ID быстро:
-1) Добавьте бота в нужную группу и сделайте его админом (право «Отправлять сообщения» достаточно).
-2) В группе напишите команду /whereami — бот ответит chat_id.
+GROUP_CHAT_ID=-1001234567890
+ADMINS=123456789,987654321
+LOCALE=ru   # ru/uz язык по умолчанию
 
 """
 
@@ -23,7 +18,7 @@ import os
 import logging
 from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -35,6 +30,8 @@ from aiogram.types import (
     Update,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
 )
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -46,11 +43,9 @@ logger = logging.getLogger("triplea.feedback")
 
 # -------------------- ENV --------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 DEFAULT_LOCALE = os.getenv("LOCALE", "ru").lower()
 
-# GROUP_CHAT_ID должен быть int (обычно отрицательный для супергрупп)
 _GROUP = os.getenv("GROUP_CHAT_ID", "").strip()
 GROUP_CHAT_ID: Optional[int] = int(_GROUP) if _GROUP and _GROUP.lstrip("-").isdigit() else None
 
@@ -62,58 +57,83 @@ if not (BOT_TOKEN and WEBHOOK_URL and GROUP_CHAT_ID is not None):
 # -------------------- i18n --------------------
 T = {
     "ru": {
-        "start": "Привет! Это бот для сбора обратной связи по агрегатору TripleA. Давайте пройдём короткий опрос (2–3 минуты).",
+        "start": "Привет! Это бот для сбора обратной связи по агрегатору TripleA. Выберите язык и пройдите короткий опрос (2–3 минуты).",
+        "ask_lang": "Выберите язык / Tilni tanlang:",
+        "lang_switched": "Язык переключён на русский.",
+
         "ask_company": "1/7. Укажите название вашей компании (автопроката)",
-        "ask_contact": "2/7. Как с вами связаться? Оставьте телефон или @username",
-        "ask_modules": "3/7. Что тестировали? Выберите все подходящие варианты:",
+        "ask_contact": "2/7. Нажмите кнопку, чтобы отправить ваш номер",
+        "btn_share_phone": "📞 Отправить номер",
+
+        "ask_modules": "3/7. Что тестировали? Выберите варианты:",
         "modules": [
             ("client_bot", "Клиентский Telegram‑бот"),
             ("partner_bot", "Партнёрский Telegram‑бот"),
             ("partner_web", "Веб‑кабинет партнёра"),
+            ("payments", "Платежи/Инвойсы"),
+            ("notifications", "Уведомления"),
+            ("reports", "Отчёты/Аналитика"),
         ],
-        "ask_rating": "4/7. Общая оценка удобства по шкале 1–5 (1 — неудобно, 5 — супер)",
+
+        "ask_rating": "4/7. Оцените удобство",
+        "btn_rating": ["1", "2", "3", "4", "5"],
+
         "ask_pros": "5/7. Что понравилось? (кратко)",
         "ask_cons": "6/7. Что было непонятно/неудобно? (кратко)",
         "ask_bugs": "7/7. Нашли ошибки/баги? Опишите, пожалуйста",
         "ask_missing": "Что добавить в первую очередь? (обязательные функции)",
         "ask_ready": "Готовы продолжить тестирование после обновлений?",
+
         "btn_yes": "Да",
         "btn_no": "Нет",
         "btn_done": "Готово",
+        "btn_next": "Далее",
+
         "cancel": "Опрос прерван. Можно начать снова командой /start",
         "thanks": "Спасибо! Ваш фидбек отправлен команде 👌",
-        "invalid_rating": "Пожалуйста, введите число от 1 до 5",
         "choose": "Выберите вариант ниже:",
-        "lang_switched": "Язык переключён на русский.",
-        "help": "Команды: /start — начать опрос, /cancel — отменить, /lang — выбрать язык, /whereami — показать chat_id",
-        "ask_lang": "Выберите язык / Tilni tanlang:",
+        "invalid_rating": "Выберите оценку кнопкой ниже",
+        "help": "Команды: /start — начать, /cancel — отменить, /lang — язык, /whereami — chat_id",
     },
+
     "uz": {
-        "start": "Salom! Bu bot TripleA agregatori bo‘yicha fikr-mulohazalarni yig‘ish uchun. Keling, qisqa so‘rovnomadan o‘tamiz (2–3 daqiqa).",
-        "ask_company": "1/7. Kompaniyangiz (avtoprokat) nomini kiriting",
-        "ask_contact": "2/7. Qanday bog‘lansak bo‘ladi? Telefon yoki @username qoldiring",
-        "ask_modules": "3/7. Nimani sinadingiz? Mos variantlarni tanlang:",
+        "start": "Salom! Bu bot TripleA agregatori bo‘yicha fikr-mulohazalarni yig‘adi. Tilni tanlang va qisqa so‘rovnomadan o‘ting (2–3 daqiqa).",
+        "ask_lang": "Tilni tanlang / Выберите язык:",
+        "lang_switched": "Til o‘zbek tiliga o‘zgartirildi.",
+
+        "ask_company": "1/7. Kompaniyangiz nomi (avtoprokat)",
+        "ask_contact": "2/7. Tugmani bosib telefon raqamingizni yuboring",
+        "btn_share_phone": "📞 Raqamni yuborish",
+
+        "ask_modules": "3/7. Nimalarni sinadingiz? Variantlarni tanlang:",
         "modules": [
             ("client_bot", "Mijoz Telegram boti"),
             ("partner_bot", "Hamkor Telegram boti"),
-            ("partner_web", "Hamkorning veb kabineti"),
+            ("partner_web", "Hamkor veb kabineti"),
+            ("payments", "To‘lovlar/Hisob-faktura"),
+            ("notifications", "Bildirishnomalar"),
+            ("reports", "Hisobot/Analitika"),
         ],
-        "ask_rating": "4/7. Qulaylik bo‘yicha umumiy baho 1–5 (1 — noqulay, 5 — juda yaxshi)",
+
+        "ask_rating": "4/7. Qulaylikka baho bering",
+        "btn_rating": ["1", "2", "3", "4", "5"],
+
         "ask_pros": "5/7. Nima yoqdi? (qisqa)",
         "ask_cons": "6/7. Nima tushunarsiz/noqulay bo‘ldi? (qisqa)",
-        "ask_bugs": "7/7. Xatolik/bug topildimi? Iltimos, yozib bering",
-        "ask_missing": "Birinchi navbatda nimani qo‘shish kerak? (majburiy funksiyalar)",
-        "ask_ready": "Yangilanishlardan so‘ng testni davom ettirasizmi?",
+        "ask_bugs": "7/7. Xatolik/bug bormi? Iltimos yozing",
+        "ask_missing": "Birinchi navbatda nimani qo‘shish kerak?",
+        "ask_ready": "Yangilanishlardan so‘ng davom ettirasizmi?",
+
         "btn_yes": "Ha",
         "btn_no": "Yo‘q",
         "btn_done": "Tayyor",
-        "cancel": "So‘rovnoma bekor qilindi. /start bilan qaytadan boshlashingiz mumkin",
+        "btn_next": "Keyingi",
+
+        "cancel": "So‘rovnoma bekor qilindi. /start bilan qayta boshlang",
         "thanks": "Rahmat! Fikr-mulohazangiz jamoaga yuborildi 👌",
-        "invalid_rating": "Iltimos, 1 dan 5 gacha bo‘lgan son kiriting",
-        "choose": "Quyidagi variantlardan tanlang:",
-        "lang_switched": "Til o‘zbek tiliga o‘zgartirildi.",
-        "help": "Buyruqlar: /start — boshlash, /cancel — bekor qilish, /lang — tilni tanlash, /whereami — chat_id",
-        "ask_lang": "Tilni tanlang / Выберите язык:",
+        "choose": "Quyidan tanlang:",
+        "invalid_rating": "Bahoni tugma orqali tanlang",
+        "help": "Buyruqlar: /start — boshlash, /cancel — bekor, /lang — til, /whereami — chat_id",
     },
 }
 
@@ -138,7 +158,6 @@ class Form(StatesGroup):
     missing = State()
     ready = State()
 
-# user locale in memory (для MVP)
 USER_LOCALE: Dict[int, str] = {}
 
 # -------------------- Keyboards --------------------
@@ -146,17 +165,47 @@ USER_LOCALE: Dict[int, str] = {}
 def lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Русский", callback_data="lang:ru"),
-        InlineKeyboardButton(text="O‘zbekcha", callback_data="lang:uz")
+        InlineKeyboardButton(text="O‘zbekcha", callback_data="lang:uz"),
     ]])
 
 
-def modules_keyboard(locale: str, selected: Optional[List[str]] = None) -> InlineKeyboardMarkup:
+def contact_keyboard(locale: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=_k(locale, "btn_share_phone"), request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        selective=True,
+    )
+
+
+def _grid(items: List[List[str]], columns: int = 2) -> List[List[InlineKeyboardButton]]:
+    # items: list of [callback_data, label]
+    rows: List[List[InlineKeyboardButton]] = []
+    row: List[InlineKeyboardButton] = []
+    for code, label in items:
+        row.append(InlineKeyboardButton(text=label, callback_data=code))
+        if len(row) >= columns:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return rows
+
+
+def modules_keyboard(locale: str, selected: Optional[List[str]] = None, columns: int = 2) -> InlineKeyboardMarkup:
     selected = selected or []
-    rows = []
+    items = []
     for code, label in T[locale]["modules"]:
         mark = " ✅" if code in selected else ""
-        rows.append([InlineKeyboardButton(text=f"{label}{mark}", callback_data=f"m:{code}")])
+        items.append((f"m:{code}", f"{label}{mark}"))
+    rows = _grid(items, columns)
     rows.append([InlineKeyboardButton(text=_k(locale, "btn_done"), callback_data="m:done")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def rating_keyboard(locale: str) -> InlineKeyboardMarkup:
+    items = [(f"r:{v}", v) for v in T[locale]["btn_rating"]]
+    rows = _grid(items, columns=5)  # одна строка 1..5
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -166,7 +215,7 @@ def yesno_keyboard(locale: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_k(locale, "btn_no"), callback_data="yn:no"),
     ]])
 
-# -------------------- Service commands --------------------
+# -------------------- Сервисные команды --------------------
 @router.message(Command("lang"))
 async def cmd_lang(m: Message):
     await m.answer(_k(USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE), "ask_lang"), reply_markup=lang_keyboard())
@@ -181,13 +230,17 @@ async def cb_lang(c: CallbackQuery):
 
 @router.message(Command("whereami"))
 async def cmd_whereami(m: Message):
-    await m.answer(f"chat_id: <code>{m.chat.id}</code>\nchat_type: <code>{m.chat.type}</code>")
+    await m.answer(f"chat_id: <code>{m.chat.id}</code>
+chat_type: <code>{m.chat.type}</code>")
 
 
 @router.message(CommandStart())
 async def cmd_start(m: Message, state: FSMContext):
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await state.clear()
+    # Сначала предлагаем выбрать язык
+    await m.answer(_k(locale, "ask_lang"), reply_markup=lang_keyboard())
+    # Затем сразу даём старт опросу
     await m.answer(_k(locale, "start"))
     await m.answer(_k(locale, "ask_company"))
     await state.set_state(Form.company)
@@ -199,18 +252,31 @@ async def cmd_cancel(m: Message, state: FSMContext):
     await m.answer(_k(USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE), "cancel"))
 
 
-# -------------------- Flow --------------------
+# -------------------- Опрос --------------------
 @router.message(Form.company)
 async def f_company(m: Message, state: FSMContext):
-    await state.update_data(company=m.text.strip())
+    await state.update_data(company=(m.text or "").strip())
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
-    await m.answer(_k(locale, "ask_contact"))
+    await m.answer(_k(locale, "ask_contact"), reply_markup=contact_keyboard(locale))
     await state.set_state(Form.contact)
 
 
+# Приходит объект контакта по кнопке "Отправить номер"
+@router.message(Form.contact, F.contact)
+async def f_contact_button(m: Message, state: FSMContext):
+    phone = m.contact.phone_number
+    await state.update_data(contact=phone)
+    locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
+    # Убираем клавиатуру
+    await m.answer("✅", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=" ")]], resize_keyboard=True))
+    await m.answer(_k(locale, "ask_modules"), reply_markup=modules_keyboard(locale))
+    await state.set_state(Form.modules)
+
+
+# Фолбэк: если пользователь всё же ввёл текст руками
 @router.message(Form.contact)
-async def f_contact(m: Message, state: FSMContext):
-    await state.update_data(contact=m.text.strip(), modules=[])
+async def f_contact_text(m: Message, state: FSMContext):
+    await state.update_data(contact=(m.text or "").strip())
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await m.answer(_k(locale, "ask_modules"), reply_markup=modules_keyboard(locale))
     await state.set_state(Form.modules)
@@ -228,38 +294,39 @@ async def f_modules(c: CallbackQuery, state: FSMContext):
             await c.answer(_k(locale, "choose"), show_alert=True)
             return
         await c.message.edit_reply_markup(reply_markup=None)
-        await c.message.answer(_k(locale, "ask_rating"))
+        await c.message.answer(_k(locale, "ask_rating"), reply_markup=rating_keyboard(locale))
         await state.set_state(Form.rating)
         return
 
+    real_code = code
     if code in selected:
-        selected.remove(code)
+        selected.remove(real_code)
     else:
-        selected.append(code)
+        selected.append(real_code)
 
     await state.update_data(modules=selected)
     await c.message.edit_reply_markup(reply_markup=modules_keyboard(locale, selected))
     await c.answer("✓")
 
 
-@router.message(Form.rating)
-async def f_rating(m: Message, state: FSMContext):
-    locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
+# Оценка только кнопками 1..5
+@router.callback_query(Form.rating, F.data.startswith("r:"))
+async def f_rating_cb(c: CallbackQuery, state: FSMContext):
+    val = c.data.split(":", 1)[1]
     try:
-        val = int(m.text.strip())
-        if val < 1 or val > 5:
-            raise ValueError
+        rating = int(val)
     except Exception:
-        await m.answer(_k(locale, "invalid_rating"))
-        return
-    await state.update_data(rating=val)
-    await m.answer(_k(locale, "ask_pros"))
+        rating = 0
+    await state.update_data(rating=rating)
+    locale = USER_LOCALE.get(c.from_user.id, DEFAULT_LOCALE)
+    await c.message.edit_reply_markup(reply_markup=None)
+    await c.message.answer(_k(locale, "ask_pros"))
     await state.set_state(Form.pros)
 
 
 @router.message(Form.pros)
 async def f_pros(m: Message, state: FSMContext):
-    await state.update_data(pros=m.text.strip())
+    await state.update_data(pros=(m.text or "").strip())
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await m.answer(_k(locale, "ask_cons"))
     await state.set_state(Form.cons)
@@ -267,7 +334,7 @@ async def f_pros(m: Message, state: FSMContext):
 
 @router.message(Form.cons)
 async def f_cons(m: Message, state: FSMContext):
-    await state.update_data(cons=m.text.strip())
+    await state.update_data(cons=(m.text or "").strip())
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await m.answer(_k(locale, "ask_bugs"))
     await state.set_state(Form.bugs)
@@ -275,7 +342,7 @@ async def f_cons(m: Message, state: FSMContext):
 
 @router.message(Form.bugs)
 async def f_bugs(m: Message, state: FSMContext):
-    await state.update_data(bugs=m.text.strip())
+    await state.update_data(bugs=(m.text or "").strip())
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await m.answer(_k(locale, "ask_missing"))
     await state.set_state(Form.missing)
@@ -283,7 +350,7 @@ async def f_bugs(m: Message, state: FSMContext):
 
 @router.message(Form.missing)
 async def f_missing(m: Message, state: FSMContext):
-    await state.update_data(missing=m.text.strip())
+    await state.update_data(missing=(m.text or "").strip())
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await m.answer(_k(locale, "ask_ready"), reply_markup=yesno_keyboard(locale))
     await state.set_state(Form.ready)
@@ -298,21 +365,31 @@ async def f_ready(c: CallbackQuery, state: FSMContext):
     user = c.from_user
     modules = data.get("modules", [])
     label_map = {code: label for code, label in T[locale]["modules"]}
-    modules_labels = ", ".join(label_map.get(x, x) for x in modules)
+    modules_labels = ", ".join(label_map.get(x.replace("m:", ""), x) for x in modules)
 
-        # Формируем текст отчёта
     text = (
-        "🆕 <b>Новый фидбек по MVP TripleA</b>\n"
-        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})\n"
-        f"🏢 Компания: {data.get('company','')}\n"
-        f"📞 Контакт: {data.get('contact','')}\n"
-        f"🧩 Модули: {modules_labels}\n"
-        f"⭐️ Оценка: {data.get('rating','')}\n"
-        f"👍 Понравилось: {data.get('pros','')}\n"
-        f"👎 Неудобно: {data.get('cons','')}\n"
-        f"🐞 Баги: {data.get('bugs','')}\n"
-        f"➕ Must-have: {data.get('missing','')}\n"
+        "🆕 <b>Новый фидбек по MVP TripleA</b>
+"
+        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+"
+        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})
+"
+        f"🏢 Компания: {data.get('company','')}
+"
+        f"📞 Контакт: {data.get('contact','')}
+"
+        f"🧩 Модули: {modules_labels}
+"
+        f"⭐️ Оценка: {data.get('rating','')}
+"
+        f"👍 Понравилось: {data.get('pros','')}
+"
+        f"👎 Неудобно: {data.get('cons','')}
+"
+        f"🐞 Баги: {data.get('bugs','')}
+"
+        f"➕ Must-have: {data.get('missing','')}
+"
         f"🚀 Готовы продолжать: {'Да' if ready_flag else 'Нет'}"
     )
 
@@ -357,7 +434,7 @@ async def telegram_webhook(request: Request):
 @dp.startup()
 async def on_startup():
     try:
-        await bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
+        await bot.set_webhook(url=WEBHOOK_URL)
         logger.info("Webhook set: %s", WEBHOOK_URL)
     except Exception:
         logger.exception("Failed to set webhook")
