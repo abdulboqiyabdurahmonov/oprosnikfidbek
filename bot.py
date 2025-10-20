@@ -300,24 +300,21 @@ async def f_ready(c: CallbackQuery, state: FSMContext):
     label_map = {code: label for code, label in T[locale]["modules"]}
     modules_labels = ", ".join(label_map.get(x, x) for x in modules)
 
-    # Сформируем текст отчёта
-    lines = [
-        "🆕 <b>Новый фидбек по MVP TripleA</b>",
-        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
-        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})",
-        f"🏢 Компания: {data.get('company','')}",
-        f"📞 Контакт: {data.get('contact','')}",
-        f"🧩 Модули: {modules_labels}",
-        f"⭐️ Оценка: {data.get('rating','')}",
-        f"👍 Понравилось: {data.get('pros','')}",
-        f"👎 Неудобно: {data.get('cons','')}",
-        f"🐞 Баги: {data.get('bugs','')}",
-        f"➕ Must‑have: {data.get('missing','')}",
-        f"🚀 Готовы продолжать: {'Да' if ready_flag else 'Нет'}",
-    ]
-
-    text = "
-".join(lines)
+        # Формируем текст отчёта
+    text = (
+        "🆕 <b>Новый фидбек по MVP TripleA</b>\n"
+        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})\n"
+        f"🏢 Компания: {data.get('company','')}\n"
+        f"📞 Контакт: {data.get('contact','')}\n"
+        f"🧩 Модули: {modules_labels}\n"
+        f"⭐️ Оценка: {data.get('rating','')}\n"
+        f"👍 Понравилось: {data.get('pros','')}\n"
+        f"👎 Неудобно: {data.get('cons','')}\n"
+        f"🐞 Баги: {data.get('bugs','')}\n"
+        f"➕ Must-have: {data.get('missing','')}\n"
+        f"🚀 Готовы продолжать: {'Да' if ready_flag else 'Нет'}"
+    )
 
     # Отправка в группу
     try:
