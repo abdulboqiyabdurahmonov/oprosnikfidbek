@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-TripleA Partner Feedback Bot — noSheets (RU/UZ, контакт по кнопке, больше кнопок, минимум ручного ввода)
-Все ответы отправляются в Telegram‑группу (+ дубль админам).
+TripleA Partner Feedback Bot — noSheets (RU/UZ, контакт по кнопке, больше кнопок)
+Ответы летят в Telegram-группу (+ дубль админам).
 Стек: FastAPI (webhook), Aiogram v3. Готов для Render/uvicorn.
 
-ENV VARS
---------
-BOT_TOKEN=...
-WEBHOOK_URL=https://your.onrender.com/webhook
-GROUP_CHAT_ID=-1001234567890
-ADMINS=123456789,987654321
-LOCALE=ru   # ru/uz язык по умолчанию
-
+ENV:
+  BOT_TOKEN=...
+  WEBHOOK_URL=https://your.onrender.com/webhook
+  GROUP_CHAT_ID=-1001234567890
+  ADMINS=123456789,987654321
+  LOCALE=ru   # ru/uz по умолчанию
 """
 
 import os
@@ -58,7 +56,7 @@ if not (BOT_TOKEN and WEBHOOK_URL and GROUP_CHAT_ID is not None):
 # -------------------- i18n --------------------
 T = {
     "ru": {
-        "start": "Привет! Это бот для сбора обратной связи по агрегатору TripleA. Выберите язык и пройдите короткий опрос (2–3 минуты).",
+        "start": "Привет! Это бот для сбора обратной связи по агрегатору TripleA. Коротко и по делу (2–3 минуты).",
         "ask_lang": "Выберите язык / Tilni tanlang:",
         "lang_switched": "Язык переключён на русский.",
 
@@ -68,9 +66,9 @@ T = {
 
         "ask_modules": "3/7. Что тестировали? Выберите варианты:",
         "modules": [
-            ("client_bot", "Клиентский Telegram‑бот"),
-            ("partner_bot", "Партнёрский Telegram‑бот"),
-            ("partner_web", "Веб‑кабинет партнёра"),
+            ("client_bot", "Клиентский Telegram-бот"),
+            ("partner_bot", "Партнёрский Telegram-бот"),
+            ("partner_web", "Веб-кабинет партнёра"),
             ("payments", "Платежи/Инвойсы"),
             ("notifications", "Уведомления"),
             ("reports", "Отчёты/Аналитика"),
@@ -98,7 +96,7 @@ T = {
     },
 
     "uz": {
-        "start": "Salom! Bu bot TripleA agregatori bo‘yicha fikr-mulohazalarni yig‘adi. Tilni tanlang va qisqa so‘rovnomadan o‘ting (2–3 daqiqa).",
+        "start": "Salom! Bu bot TripleA agregatori bo‘yicha fikr-mulohazalarni yig‘adi. Juda qisqa — 2–3 daqiqa.",
         "ask_lang": "Tilni tanlang / Выберите язык:",
         "lang_switched": "Til o‘zbek tiliga o‘zgartirildi.",
 
@@ -162,7 +160,6 @@ class Form(StatesGroup):
 USER_LOCALE: Dict[int, str] = {}
 
 # -------------------- Keyboards --------------------
-
 def lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Русский", callback_data="lang:ru"),
@@ -215,7 +212,7 @@ def yesno_keyboard(locale: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_k(locale, "btn_no"), callback_data="yn:no"),
     ]])
 
-# -------------------- Сервисные команды --------------------
+# -------------------- Service commands --------------------
 @router.message(Command("lang"))
 async def cmd_lang(m: Message):
     await m.answer(_k(USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE), "ask_lang"), reply_markup=lang_keyboard())
@@ -226,9 +223,7 @@ async def cb_lang(c: CallbackQuery, state: FSMContext):
     """Выбор языка: сохраняем и запускаем опрос только ПОСЛЕ выбора."""
     _, lang = c.data.split(":", 1)
     USER_LOCALE[c.from_user.id] = lang
-    # Подтверждаем выбор и убираем клавиатуру языка
     await c.message.edit_text(_k(lang, "lang_switched"))
-    # Стартуем опрос
     await c.message.answer(_k(lang, "start"))
     await c.message.answer(_k(lang, "ask_company"))
     await state.set_state(Form.company)
@@ -241,8 +236,7 @@ async def cmd_whereami(m: Message):
 
 @router.message(CommandStart())
 async def cmd_start(m: Message, state: FSMContext):
-    """На /start только спрашиваем язык. Ничего дальше не отправляем
-    до нажатия кнопки в коллбэке cb_lang."""
+    """На /start только спрашиваем язык; опрос стартует после выбора в cb_lang."""
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await state.clear()
     await m.answer(_k(locale, "ask_lang"), reply_markup=lang_keyboard())
@@ -253,8 +247,7 @@ async def cmd_cancel(m: Message, state: FSMContext):
     await state.clear()
     await m.answer(_k(USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE), "cancel"))
 
-
-# -------------------- Опрос --------------------
+# -------------------- Survey --------------------
 @router.message(Form.company)
 async def f_company(m: Message, state: FSMContext):
     await state.update_data(company=(m.text or "").strip())
@@ -284,11 +277,11 @@ async def f_contact_text(m: Message, state: FSMContext):
 @router.callback_query(Form.modules, F.data.startswith("m:"))
 async def f_modules(c: CallbackQuery, state: FSMContext):
     locale = USER_LOCALE.get(c.from_user.id, DEFAULT_LOCALE)
-    code = c.data.split(":", 1)[1]  # чистый код модуля (без префикса)
+    tail = c.data.split(":", 1)[1]  # after 'm:'
     data = await state.get_data()
     selected: List[str] = data.get("modules", [])
 
-    if code == "done":
+    if tail == "done":
         if not selected:
             await c.answer(_k(locale, "choose"), show_alert=True)
             return
@@ -297,6 +290,7 @@ async def f_modules(c: CallbackQuery, state: FSMContext):
         await state.set_state(Form.rating)
         return
 
+    code = tail
     if code in selected:
         selected.remove(code)
     else:
@@ -365,28 +359,17 @@ async def f_ready(c: CallbackQuery, state: FSMContext):
     modules_labels = ", ".join(label_map.get(x, x) for x in modules)
 
     text = (
-        "🆕 <b>Новый фидбек по MVP TripleA</b>
-"
-        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
-"
-        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})
-"
-        f"🏢 Компания: {data.get('company','')}
-"
-        f"📞 Контакт: {data.get('contact','')}
-"
-        f"🧩 Модули: {modules_labels}
-"
-        f"⭐️ Оценка: {data.get('rating','')}
-"
-        f"👍 Понравилось: {data.get('pros','')}
-"
-        f"👎 Неудобно: {data.get('cons','')}
-"
-        f"🐞 Баги: {data.get('bugs','')}
-"
-        f"➕ Must-have: {data.get('missing','')}
-"
+        "🆕 <b>Новый фидбек по MVP TripleA</b>\n"
+        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
+        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})\n"
+        f"🏢 Компания: {data.get('company','')}\n"
+        f"📞 Контакт: {data.get('contact','')}\n"
+        f"🧩 Модули: {modules_labels}\n"
+        f"⭐️ Оценка: {data.get('rating','')}\n"
+        f"👍 Понравилось: {data.get('pros','')}\n"
+        f"👎 Неудобно: {data.get('cons','')}\n"
+        f"🐞 Баги: {data.get('bugs','')}\n"
+        f"➕ Must-have: {data.get('missing','')}\n"
         f"🚀 Готовы продолжать: {'Да' if ready_flag else 'Нет'}"
     )
 
