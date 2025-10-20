@@ -222,25 +222,31 @@ async def cmd_lang(m: Message):
 
 
 @router.callback_query(F.data.startswith("lang:"))
-async def cb_lang(c: CallbackQuery):
+async def cb_lang(c: CallbackQuery, state: FSMContext):
+    """Выбор языка: сохраняем и запускаем опрос только ПОСЛЕ выбора."""
     _, lang = c.data.split(":", 1)
     USER_LOCALE[c.from_user.id] = lang
+    # Подтверждаем выбор и убираем клавиатуру языка
     await c.message.edit_text(_k(lang, "lang_switched"))
+    # Стартуем опрос
+    await c.message.answer(_k(lang, "start"))
+    await c.message.answer(_k(lang, "ask_company"))
+    await state.set_state(Form.company)
 
 
 @router.message(Command("whereami"))
 async def cmd_whereami(m: Message):
-    await m.answer(f"chat_id: <code>{m.chat.id}</code>\nchat_type: <code>{m.chat.type}</code>")
+    await m.answer(f"chat_id: <code>{m.chat.id}</code>
+chat_type: <code>{m.chat.type}</code>")
 
 
 @router.message(CommandStart())
 async def cmd_start(m: Message, state: FSMContext):
+    """На /start только спрашиваем язык. Ничего дальше не отправляем
+    до нажатия кнопки в коллбэке cb_lang."""
     locale = USER_LOCALE.get(m.from_user.id, DEFAULT_LOCALE)
     await state.clear()
     await m.answer(_k(locale, "ask_lang"), reply_markup=lang_keyboard())
-    await m.answer(_k(locale, "start"))
-    await m.answer(_k(locale, "ask_company"))
-    await state.set_state(Form.company)
 
 
 @router.message(Command("cancel"))
@@ -360,17 +366,28 @@ async def f_ready(c: CallbackQuery, state: FSMContext):
     modules_labels = ", ".join(label_map.get(x, x) for x in modules)
 
     text = (
-        "🆕 <b>Новый фидбек по MVP TripleA</b>\n"
-        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
-        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})\n"
-        f"🏢 Компания: {data.get('company','')}\n"
-        f"📞 Контакт: {data.get('contact','')}\n"
-        f"🧩 Модули: {modules_labels}\n"
-        f"⭐️ Оценка: {data.get('rating','')}\n"
-        f"👍 Понравилось: {data.get('pros','')}\n"
-        f"👎 Неудобно: {data.get('cons','')}\n"
-        f"🐞 Баги: {data.get('bugs','')}\n"
-        f"➕ Must-have: {data.get('missing','')}\n"
+        "🆕 <b>Новый фидбек по MVP TripleA</b>
+"
+        f"⏱ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+"
+        f"👤 Пользователь: <a href='tg://user?id={user.id}'>{user.full_name}</a> (@{(user.username or '').lower()})
+"
+        f"🏢 Компания: {data.get('company','')}
+"
+        f"📞 Контакт: {data.get('contact','')}
+"
+        f"🧩 Модули: {modules_labels}
+"
+        f"⭐️ Оценка: {data.get('rating','')}
+"
+        f"👍 Понравилось: {data.get('pros','')}
+"
+        f"👎 Неудобно: {data.get('cons','')}
+"
+        f"🐞 Баги: {data.get('bugs','')}
+"
+        f"➕ Must-have: {data.get('missing','')}
+"
         f"🚀 Готовы продолжать: {'Да' if ready_flag else 'Нет'}"
     )
 
