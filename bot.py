@@ -347,10 +347,7 @@ async def root():
 
 
 @app.post("/webhook")
-async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(None)):
-    if WEBHOOK_SECRET:
-        if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
-            raise HTTPException(status_code=403, detail="Invalid secret token")
+async def telegram_webhook(request: Request):
     data = await request.json()
     update = Update.model_validate(data)
     await dp.feed_update(bot, update)
